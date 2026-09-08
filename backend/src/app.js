@@ -1,31 +1,51 @@
 const express = require('express');
 const config = require('./config');
-require('./db'); // 确保建表先执行
+require('./db'); // init schema
 
-const friendsRouter = require('./routes/friends');
 const momentsRouter = require('./routes/moments');
+const friendsRouter = require('./routes/friends');
 const internalRouter = require('./routes/internal');
 
 const app = express();
-app.use(express.json());
 
-// PHASE 1：只挂内网相关能力，先跑通本地闭环，好友/联邦相关路由不挂载，
-// 相当于物理上都还没开放，连误开公网端口的可能性都没有。
-if (config.PHASE >= 1) {
-  app.use('/internal', internalRouter);
-  app.use('/api/moments', momentsRouter); // publish/feed 是内网专用，receive/action有各自的签名校验
+// 保留 rawBody 供 HMAC 验签
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf ? buf.toString('utf8') : '';
+    },
+  })
+);
+app.set('trust proxy', false);
+
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    phase: config.PHASE,
+    node: config.SELF_NODE_ID,
+    name: config.SELF_DISPLAY_NAME,
+  });
+});
+
+// 始终挂载：本地专用接口在路由内 localhostOnly
+app.use('/api/moments', momentsRouter);
+app.use('/api/friends', friendsRouter);
+app.use('/internal', internalRouter);
+
+// PHASE>=2 才“逻辑上启用联邦”；实际公网暴露靠 nginx 白名单
+// PHASE=1 时仍可本机调 receive/sync 做单测，但文档约定不开放公网
+if (config.PHASE < 2) {
+  console.log('[moments] PHASE=1：请勿将 /api/moments/receive|sync 与 /api/friends/* 暴露公网');
 }
 
-// PHASE 2+：好友相关的公网接口才挂上（request/accept-callback/receive/sync）
-if (config.PHASE >= 2) {
-  app.use('/api/friends', friendsRouter);
-}
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'internal_error', message: err.message });
+});
 
-app.get('/healthz', (req, res) => res.json({ ok: true, phase: config.PHASE }));
-
-app.listen(config.PORT, () => {
-  console.log(`朋友圈联邦后端启动，PHASE=${config.PHASE}，端口=${config.PORT}`);
-  if (config.PHASE === 1) {
-    console.log('当前PHASE=1：好友/联邦相关路由未挂载，仅本地闭环可用。');
-  }
+app.listen(config.PORT, '0.0.0.0', () => {
+  console.log(
+    `[moments] phase=${config.PHASE} node=${config.SELF_NODE_ID} listening :${config.PORT}`
+  );
+  console.log(`[moments] SELF_SERVER_URL=${config.SELF_SERVER_URL}`);
 });

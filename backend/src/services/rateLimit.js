@@ -1,21 +1,17 @@
-const config = require('../config');
-
-// 内存版限流：key -> [timestamps]。生产环境好友量大了建议换Redis，MVP阶段够用。
+/** 简单内存限流：key -> 时间戳数组 */
 const buckets = new Map();
 
-function isRateLimited(key, limitPerHour = config.FRIEND_REQUEST_RATE_LIMIT) {
+function allow(key, limit, windowMs = 3600 * 1000) {
   const now = Date.now();
-  const windowMs = 60 * 60 * 1000;
-  const list = (buckets.get(key) || []).filter((t) => now - t < windowMs);
-
-  if (list.length >= limitPerHour) {
-    buckets.set(key, list);
-    return true;
+  let arr = buckets.get(key) || [];
+  arr = arr.filter((t) => now - t < windowMs);
+  if (arr.length >= limit) {
+    buckets.set(key, arr);
+    return false;
   }
-
-  list.push(now);
-  buckets.set(key, list);
-  return false;
+  arr.push(now);
+  buckets.set(key, arr);
+  return true;
 }
 
-module.exports = { isRateLimited };
+module.exports = { allow };
