@@ -1,0 +1,41 @@
+# 反向代理路由隔离示例
+# 只放行好友联邦必需的几条路径，其余一律404，把攻击面锁死到最小
+# 参考设计文档 V3 第2节"公网暴露面扩大"的应对方案
+
+server {
+    listen 443 ssl;
+    server_name moments.example.com;
+
+    ssl_certificate     /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
+
+    # 好友请求与握手
+    location /api/friends/request {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    location /api/friends/accept-callback {
+        proxy_pass http://127.0.0.1:3000;
+    }
+
+    # 接收好友推送的动态与互动
+    location /api/moments/receive {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    location /api/moments/action {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    location /api/moments/sync {
+        proxy_pass http://127.0.0.1:3000;
+    }
+
+    # 健康检查（可选）
+    location /healthz {
+        proxy_pass http://127.0.0.1:3000;
+    }
+
+    # 其余一律拒绝：/internal/*、/api/moments/publish、/api/moments/feed、
+    # /api/friends/(其余本地专用接口，如remark、reply-mode) 都不应该出现在这里
+    location / {
+        return 404;
+    }
+}
