@@ -14,6 +14,10 @@ const config = {
   SIGNATURE_WINDOW_SECONDS: parseInt(process.env.SIGNATURE_WINDOW_SECONDS || '300', 10),
   FRIEND_REQUEST_RATE_LIMIT: parseInt(process.env.FRIEND_REQUEST_RATE_LIMIT || '5', 10),
   MAX_EXCHANGE_ROUNDS: parseInt(process.env.MAX_EXCHANGE_ROUNDS || '2', 10),
+  // 想回复的程度低于这个分数（0–100）就只点赞不评论。
+  // 分数由聊天端的模型给，后端只负责比大小 —— 阈值只有这一处，别散进提示词里。
+  // 与 MAX_EXCHANGE_ROUNDS 是两层：那个是防爆的硬闸，这个是调口味的。
+  REPLY_WILLINGNESS_THRESHOLD: parseInt(process.env.REPLY_WILLINGNESS_THRESHOLD || '60', 10),
   HANDSHAKE_TOKEN_TTL_SECONDS: parseInt(process.env.HANDSHAKE_TOKEN_TTL_SECONDS || '600', 10),
   // 前端管理通道：为空则 /api/admin/* 整体不可用
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || '',

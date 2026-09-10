@@ -30,7 +30,7 @@ PHASE=1 时只在本机用；公网用 nginx 白名单（见 `nginx.conf.example
 | POST | `/internal/friends/review` | 仅本机 | 审批通过并回调 |
 | GET | `/api/friends` | 仅本机 | 好友列表（node+identities） |
 | POST | `/internal/post-from-chat` | 仅本机 | AI 发圈，默认 private |
-| POST | `/internal/should-comment` | 仅本机 | 防刷闸 |
+| POST | `/internal/should-comment` | 仅本机 | 防刷闸；可带 `willingness` 0–100 走阈值 |
 | POST | `/internal/moderate-content` | 仅本机 | 关键词/审计 |
 
 ## 前端加好友通道 `/api/admin/*`

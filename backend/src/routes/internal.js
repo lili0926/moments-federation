@@ -22,13 +22,22 @@ router.post('/friends/review', async (req, res) => {
   res.status(status).json(rest);
 });
 
-// 聊天后端：AI 是否应评论
+/**
+ * 聊天后端：AI 是否应评论。
+ *
+ * 两种叫法都支持：
+ * - 不带 willingness：还是老行为，回 ask_llm 让模型自己决定说不说
+ * - 带 willingness（0–100，模型先给的「想回复的程度」）：低于阈值就地判成只点赞
+ *
+ * 响应里始终带 threshold，聊天端不用自己记这个数。
+ */
 router.post('/should-comment', (req, res) => {
   const {
     moment_id,
     my_identity_id,
     friend_node_id,
     friend_identity_id,
+    willingness,
   } = req.body || {};
 
   if (!moment_id || !friend_node_id) {
@@ -39,7 +48,8 @@ router.post('/should-comment', (req, res) => {
     moment_id,
     my_identity_id || config.SELF_AI_ID,
     friend_node_id,
-    friend_identity_id || friend_node_id
+    friend_identity_id || friend_node_id,
+    willingness
   );
   res.json(result);
 });

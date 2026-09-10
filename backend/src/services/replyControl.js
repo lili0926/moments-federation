@@ -53,27 +53,56 @@ function resolveReplyMode(friendNodeId, friendIdentityId) {
 }
 
 /**
- * @returns {{ action: 'like_only'|'ask_llm'|'blocked', reason?: string, forceComment?: boolean }}
+ * 把「想回复的程度」规整成 0–100 的整数；给不出数就返回 null（当作没提供）
  */
-function decideAction(momentId, myIdentityId, friendNodeId, friendIdentityId) {
+function normalizeWillingness(v) {
+  if (v === undefined || v === null || v === '') return null;
+  let n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  // 容错：模型有时给 0–1 的小数
+  if (n > 0 && n <= 1) n = n * 100;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+/**
+ * @param {number|string} [willingness] 聊天端模型给的「想回复的程度」0–100。
+ *   不传就还是老行为（交给模型自己决定），传了就在这里过一道阈值。
+ * @returns {{ action: 'like_only'|'ask_llm'|'blocked', reason?: string,
+ *             forceComment?: boolean, willingness?: number, threshold?: number }}
+ */
+function decideAction(momentId, myIdentityId, friendNodeId, friendIdentityId, willingness) {
+  const threshold = config.REPLY_WILLINGNESS_THRESHOLD;
   const cap = checkExchangeCap(momentId, myIdentityId, friendIdentityId);
   if (!cap.allowed) {
-    return { action: 'blocked', reason: cap.reason };
+    return { action: 'blocked', reason: cap.reason, threshold };
   }
 
   const mode = resolveReplyMode(friendNodeId, friendIdentityId);
   if (mode === 'like_only') {
-    return { action: 'like_only', reason: 'friend_set_to_like_only' };
+    return { action: 'like_only', reason: 'friend_set_to_like_only', threshold };
   }
+  // always_comment 是她对这个好友的显式设定，比阈值优先 —— 设了「总是评论」还被分数挡下来会很怪
   if (mode === 'always_comment') {
-    return { action: 'ask_llm', forceComment: true };
+    return { action: 'ask_llm', forceComment: true, threshold };
   }
-  return { action: 'ask_llm', forceComment: false };
+
+  const w = normalizeWillingness(willingness);
+  if (w !== null && w < threshold) {
+    return {
+      action: 'like_only',
+      reason: 'below_willingness_threshold',
+      willingness: w,
+      threshold,
+    };
+  }
+
+  return { action: 'ask_llm', forceComment: false, willingness: w === null ? undefined : w, threshold };
 }
 
 module.exports = {
   checkExchangeCap,
   recordExchange,
   resolveReplyMode,
+  normalizeWillingness,
   decideAction,
 };
