@@ -13,7 +13,7 @@ const {
 const { localIdentitiesPayload } = require('./friends');
 const { decideAction, recordExchange } = require('../services/replyControl');
 const { moderateLocal } = require('../services/moderation');
-const { postSigned, broadcastMoment } = require('../services/federation');
+const { postSigned, broadcastMoment, broadcastAction } = require('../services/federation');
 const { nanoid } = require('nanoid');
 
 const router = express.Router();
@@ -271,15 +271,40 @@ router.post('/moments/:momentId/react', async (req, res) => {
   const identity_id = body.identity_id || config.SELF_AI_ID;
   const comment = String(body.comment || '').trim().slice(0, 500);
 
-  const target = db
+  // 好友推来的动态在 public_feed_cache；自己发的在 moments。
+  // 只查前者的话，AI 连她自己发的公共动态都评论不了（实测 moment_not_found）。
+  let target = db
     .prepare(`SELECT * FROM public_feed_cache WHERE moment_id=? AND is_deleted=0`)
     .get(momentId);
+  let isOwn = false;
+  if (!target) {
+    const own = db
+      .prepare(`SELECT id, identity_id FROM moments WHERE id=? AND scope='public' AND is_deleted=0`)
+      .get(momentId);
+    if (own) {
+      isOwn = true;
+      target = {
+        moment_id: own.id,
+        author_id: config.SELF_NODE_ID,
+        author_identity_id: own.identity_id,
+        author_server: config.SELF_SERVER_URL,
+      };
+    }
+  }
   if (!target) return res.status(404).json({ error: 'moment_not_found' });
 
-  const friend = db
-    .prepare(`SELECT * FROM friends WHERE friend_id=? AND status='accepted'`)
-    .get(target.author_id);
-  if (!friend) return res.status(400).json({ error: 'not_a_friend' });
+  // 自己发的不用找好友（作者就是本机）；好友的才需要拿共享密钥去推
+  let friend = null;
+  if (!isOwn) {
+    friend = db
+      .prepare(`SELECT * FROM friends WHERE friend_id=? AND status='accepted'`)
+      .get(target.author_id);
+    if (!friend) return res.status(400).json({ error: 'not_a_friend' });
+  }
+  // 自己不给自己的动态出手
+  if (isOwn && identity_id === target.author_identity_id) {
+    return res.status(400).json({ error: 'cannot_react_to_own_identity' });
+  }
 
   const decision = decideAction(
     momentId,
@@ -325,11 +350,21 @@ router.post('/moments/:momentId/react', async (req, res) => {
     content: action_type === 'comment' ? comment : null,
   };
 
-  // 只发给作者那台，不广播 —— 动态在人家的库里，别的好友那儿没有这条
-  try {
-    await postSigned(friend.server_url, '/api/moments/action', friend.shared_secret, payload);
-  } catch (e) {
-    return res.status(502).json({ error: 'peer_unreachable', detail: e.message });
+  if (isOwn) {
+    // 动态在本机，不用推给作者。但要广播给所有好友，否则他们看到的那条底下是空的。
+    // 广播失败不算失败：互动已经记在本机了，别为了对方掉线就丢掉这条评论。
+    try {
+      await broadcastAction(payload);
+    } catch (e) {
+      /* 好友不可达就算了 */
+    }
+  } else {
+    // 只发给作者那台，不广播 —— 动态在人家的库里，别的好友那儿没有这条
+    try {
+      await postSigned(friend.server_url, '/api/moments/action', friend.shared_secret, payload);
+    } catch (e) {
+      return res.status(502).json({ error: 'peer_unreachable', detail: e.message });
+    }
   }
 
   const id = `${config.SELF_NODE_ID}_a${Date.now().toString(36)}`;
