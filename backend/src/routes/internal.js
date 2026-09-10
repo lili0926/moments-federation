@@ -7,70 +7,19 @@ const { localhostOnly } = require('../middleware/auth');
 const { decideAction } = require('../services/replyControl');
 const { moderateLocal, auditExternalResult } = require('../services/moderation');
 const { broadcastMoment } = require('../services/federation');
+const { reviewFriendRequest } = require('../services/handshake');
 const { localIdentitiesPayload } = require('./friends');
 
 const router = express.Router();
 router.use(localhostOnly);
 
-// 审批好友申请
+// 审批好友申请（与 /api/admin/friends/review 共用同一份实现）
 router.post('/friends/review', async (req, res) => {
-  const { request_token, action } = req.body || {};
-  // 兼容 request_id 字段名
-  const token = request_token || (req.body && req.body.request_id);
-  if (!token || action !== 'accept') {
-    return res.status(400).json({ error: 'need_token_and_accept' });
-  }
-
-  const row = db.prepare(`SELECT * FROM handshake_tokens WHERE token=?`).get(token);
-  const now = Math.floor(Date.now() / 1000);
-  if (!row || row.used || row.expires_at < now) {
-    return res.status(404).json({ error: 'token_invalid' });
-  }
-
-  const shared_secret = crypto.randomBytes(32).toString('hex');
-  db.prepare(`UPDATE handshake_tokens SET used=1 WHERE token=?`).run(token);
-  db.prepare(
-    `INSERT INTO friends (friend_id, display_name, server_url, shared_secret, status, created_at)
-     VALUES (?, ?, ?, ?, 'accepted', ?)
-     ON CONFLICT(friend_id) DO UPDATE SET shared_secret=excluded.shared_secret, status='accepted'`
-  ).run(row.from_id, row.from_name, row.from_server, shared_secret, now);
-
-  let identities = [];
-  try {
-    identities = JSON.parse(row.identities_json || '[]');
-  } catch {
-    identities = [];
-  }
-  const { upsertFriendIdentities } = require('./friends');
-  upsertFriendIdentities(row.from_id, identities);
-
-  // 回调对方 accept-callback
-  const body = {
-    from_id: config.SELF_NODE_ID,
-    from_name: config.SELF_DISPLAY_NAME,
-    from_server: config.SELF_SERVER_URL,
-    shared_secret,
-    identities: localIdentitiesPayload(),
-  };
-  try {
-    const url = row.from_server.replace(/\/$/, '') + '/api/friends/accept-callback';
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Handshake-Token': token,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      return res.status(502).json({ error: 'callback_failed', detail: t.slice(0, 300), shared_secret });
-    }
-  } catch (e) {
-    return res.status(502).json({ error: 'callback_error', detail: e.message, shared_secret });
-  }
-
-  res.json({ ok: true, friend_id: row.from_id });
+  const body = req.body || {};
+  const token = body.request_token || body.request_id;
+  const r = await reviewFriendRequest({ token, action: body.action || 'accept' });
+  const { status, ...rest } = r;
+  res.status(status).json(rest);
 });
 
 // 聊天后端：AI 是否应评论

@@ -32,6 +32,19 @@ server {
         proxy_set_header Host $host;
     }
 
+    # 前端管理通道：加好友 / 审批 / 好友列表。
+    # 靠 ADMIN_TOKEN 鉴权，必须是 HTTPS。
+    # 千万别在这里 add_header Access-Control-Allow-Origin —— Node 侧已经加了一份，
+    # 浏览器见到两个 ACAO 会直接判 CORS 失败（而且请求其实已在服务端执行完了，
+    # 表现是「日志全 200 但前端说连不上」，极难查）。
+    location /api/admin/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # /internal/* 绝不出现在这里：那里面有 AI 代发圈的口，
+    # 且 trust proxy=false 意味着一旦放行，localhostOnly 也拦不住。
     location / {
         return 404;
     }

@@ -89,7 +89,10 @@ CREATE TABLE IF NOT EXISTS handshake_tokens (
   message TEXT,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
-  used INTEGER NOT NULL DEFAULT 0
+  used INTEGER NOT NULL DEFAULT 0,
+  -- 'in'  = 别人向我发的申请，token 由对方生成，必须经我审批才能建立关系
+  -- 'out' = 我主动发起的申请，token 由本机生成，对方审批后凭它回调 accept-callback
+  direction TEXT NOT NULL DEFAULT 'in' CHECK(direction IN ('in','out'))
 );
 
 CREATE TABLE IF NOT EXISTS blocked_keywords (
@@ -119,6 +122,9 @@ try {
   ensureColumn('public_feed_cache', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('moment_interactions', 'operator_identity_id', 'TEXT');
   ensureColumn('moment_interactions', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
+  // 旧库补 direction：ALTER TABLE 不带 CHECK（SQLite 对 ADD COLUMN 的约束支持有限），
+  // 取值由代码保证；新建库的 CHECK 见上面建表语句
+  ensureColumn('handshake_tokens', 'direction', "TEXT NOT NULL DEFAULT 'in'");
 } catch (e) {
   console.warn('[db migrate]', e.message);
 }

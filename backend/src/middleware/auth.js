@@ -63,4 +63,30 @@ function localhostOnly(req, res, next) {
   next();
 }
 
-module.exports = { verifyFederationRequest, localhostOnly, signBody };
+/**
+ * 前端管理通道鉴权。
+ *
+ * 与 localhostOnly 的关系：localhostOnly 保护的是 /internal/*（AI 代发圈等），
+ * 那些口永远不出公网。adminOnly 保护的是本人从手机/浏览器操作的 /api/admin/*，
+ * 走公网但必须持 ADMIN_TOKEN。两者不可互相替代。
+ *
+ * 注意：比较前先 sha256，使两边长度固定，避免 timingSafeEqual 因长度不等
+ * 提前返回而泄漏 token 长度。
+ */
+function adminOnly(req, res, next) {
+  if (!config.ADMIN_TOKEN) {
+    return res.status(503).json({
+      error: 'admin_not_configured',
+      hint: '在 .env 里设置 ADMIN_TOKEN 后重启',
+    });
+  }
+  const presented = req.get('X-Admin-Token') || '';
+  const a = crypto.createHash('sha256').update(presented, 'utf8').digest();
+  const b = crypto.createHash('sha256').update(config.ADMIN_TOKEN, 'utf8').digest();
+  if (!crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'bad_admin_token' });
+  }
+  next();
+}
+
+module.exports = { verifyFederationRequest, localhostOnly, adminOnly, signBody };
