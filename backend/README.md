@@ -45,6 +45,7 @@ PHASE=1 时只在本机用；公网用 nginx 白名单（见 `nginx.conf.example
 | POST | `/api/admin/invite/parse` | 解析对方邀请码，做「确认要加 TA 吗」的预览 |
 | POST | `/api/admin/friends/invite` | **发起申请**：`{code}` 或 `{target_server}`，可带 `message` |
 | GET | `/api/admin/feed` | 公共时间线（好友推来的 + 我自己发的）+ 每条的赞/评论 |
+| POST | `/api/admin/publish` | 发一条 public 动态并广播（`/api/moments/publish` 是 localhostOnly，手机够不到） |
 | POST | `/api/admin/moments/:id/react` | 替本机身份点赞/评论；闸门在服务端，`{willingness, comment}` |
 | GET | `/api/admin/friends/requests` | 待办：`incoming`（等我审）+ `outgoing`（我发出的） |
 | POST | `/api/admin/friends/review` | `{request_token, action:'accept'\|'reject'}` |

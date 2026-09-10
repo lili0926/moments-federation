@@ -13,7 +13,8 @@ const {
 const { localIdentitiesPayload } = require('./friends');
 const { decideAction, recordExchange } = require('../services/replyControl');
 const { moderateLocal } = require('../services/moderation');
-const { postSigned } = require('../services/federation');
+const { postSigned, broadcastMoment } = require('../services/federation');
+const { nanoid } = require('nanoid');
 
 const router = express.Router();
 
@@ -207,6 +208,51 @@ router.get('/feed', (req, res) => {
     });
 
   res.json({ items, threshold: config.REPLY_WILLINGNESS_THRESHOLD });
+});
+
+/**
+ * 发一条公共动态并广播给好友。
+ *
+ * `/api/moments/publish` 是 localhostOnly，手机上的 App 够不到 ——
+ * 没有这个口，她在公共朋友圈里发的东西一辈子出不了这台机器。
+ * 这里只发 public：private 的动态本来就该留在 App 本地，不该上 VPS。
+ */
+router.post('/publish', async (req, res) => {
+  const body = req.body || {};
+  const content = String(body.content || '').trim();
+  if (!content) return res.status(400).json({ error: 'empty_content' });
+
+  let identity_id = body.identity_id || config.SELF_HUMAN_ID;
+  const idRow = db
+    .prepare(`SELECT identity_id, display_name FROM local_identities WHERE identity_id=?`)
+    .get(identity_id);
+  if (!idRow) identity_id = config.SELF_HUMAN_ID;
+
+  const mod = moderateLocal(content, 'moment', null);
+  if (!mod.safe) return res.status(400).json({ error: 'content_blocked', moderation: mod });
+
+  const id = `${config.SELF_NODE_ID}_${nanoid(12)}`;
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare(
+    `INSERT INTO moments (id, author_id, identity_id, content, scope, created_at, is_deleted)
+     VALUES (?, ?, ?, ?, 'public', ?, 0)`
+  ).run(id, config.SELF_NODE_ID, identity_id, content, now);
+
+  // 广播失败不回滚：动态已经是自己的了，好友那边下次 sync 还能补上
+  let broadcast = null;
+  try {
+    broadcast = await broadcastMoment({
+      id,
+      identity_id,
+      content,
+      created_at: now,
+      author_name: idRow ? idRow.display_name : config.SELF_DISPLAY_NAME,
+    });
+  } catch (e) {
+    broadcast = { error: e.message };
+  }
+
+  res.json({ ok: true, moment: { id, identity_id, content, scope: 'public', created_at: now }, broadcast });
 });
 
 /**
