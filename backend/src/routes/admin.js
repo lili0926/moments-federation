@@ -394,6 +394,48 @@ router.post('/moments/:momentId/react', async (req, res) => {
   res.json({ ok: true, did: action_type, interaction_id: id, decision });
 });
 
+
+/**
+ * 删除本机发的公共动态（软删 + 广播墓碑给好友）。
+ * body 可选：无。只能删自己 moments 表里的。
+ */
+router.post('/moments/:momentId/delete', async (req, res) => {
+  const { momentId } = req.params;
+  if (!momentId) return res.status(400).json({ error: 'missing_moment_id' });
+
+  const row = db.prepare(`SELECT * FROM moments WHERE id=? AND is_deleted=0`).get(momentId);
+  if (!row) return res.status(404).json({ error: 'moment_not_found' });
+  if (row.scope !== 'public') {
+    // 私人动态不在联邦库对外删；前端私人圈本地处理
+    return res.status(400).json({ error: 'not_public_moment' });
+  }
+
+  db.prepare(`UPDATE moments SET is_deleted=1 WHERE id=?`).run(momentId);
+  // 本机 feed 缓存里若有镜像也软删
+  try {
+    db.prepare(`UPDATE public_feed_cache SET is_deleted=1 WHERE moment_id=?`).run(momentId);
+  } catch (e) {}
+
+  let broadcast = null;
+  try {
+    broadcast = await broadcastAction({
+      target_moment_id: momentId,
+      operator_id: config.SELF_NODE_ID,
+      operator_identity_id: row.identity_id,
+      operator_name: (() => {
+        const r = db.prepare(`SELECT display_name FROM local_identities WHERE identity_id=?`).get(row.identity_id);
+        return r ? r.display_name : config.SELF_DISPLAY_NAME;
+      })(),
+      action_type: 'delete',
+      content: null,
+    });
+  } catch (e) {
+    broadcast = { error: e.message };
+  }
+
+  res.json({ ok: true, broadcast });
+});
+
 router.post('/friends/:friendId/:identityId/reply-mode', (req, res) => {
   const { friendId, identityId } = req.params;
   const mode = req.body && req.body.reply_mode;
