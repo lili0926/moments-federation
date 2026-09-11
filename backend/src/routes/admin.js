@@ -269,7 +269,12 @@ router.post('/moments/:momentId/react', async (req, res) => {
   const { momentId } = req.params;
   const body = req.body || {};
   const identity_id = body.identity_id || config.SELF_AI_ID;
-  const comment = String(body.comment || '').trim().slice(0, 500);
+  let comment = String(body.comment || '').trim().slice(0, 500);
+  const replyToName = String(body.reply_to_name || body.replyToName || '').trim().slice(0, 40);
+  // 微信体：A 回复 B：正文 —— 存进 content，旧客户端也能直接显示
+  if (comment && replyToName && !/^回复/.test(comment)) {
+    comment = (`回复${replyToName}：` + comment).slice(0, 500);
+  }
 
   // 好友推来的动态在 public_feed_cache；自己发的在 moments。
   // 只查前者的话，AI 连她自己发的公共动态都评论不了（实测 moment_not_found）。
@@ -301,9 +306,9 @@ router.post('/moments/:momentId/react', async (req, res) => {
       .get(target.author_id);
     if (!friend) return res.status(400).json({ error: 'not_a_friend' });
   }
-  // 自己不给自己的动态出手
-  if (isOwn && identity_id === target.author_identity_id) {
-    return res.status(400).json({ error: 'cannot_react_to_own_identity' });
+  // 自己给自己：不能点赞；但可以在自己动态下评论（微信同款，方便回别人的评论）
+  if (isOwn && identity_id === target.author_identity_id && !comment) {
+    return res.status(400).json({ error: 'cannot_like_own', message: '不能给自己点赞' });
   }
 
   const decision = decideAction(
@@ -313,11 +318,17 @@ router.post('/moments/:momentId/react', async (req, res) => {
     target.author_identity_id,
     body.willingness
   );
-  if (decision.action === 'blocked') {
+  // 用户主动写了评论：以评论为准，不被 willingness / like_only 降成只点赞
+  if (comment) {
+    // 往返上限仍尊重，避免刷屏
+    if (decision.action === 'blocked' && decision.reason === 'max_rounds') {
+      return res.json({ ok: true, did: 'nothing', reason: 'max_rounds', decision });
+    }
+  } else if (decision.action === 'blocked') {
     return res.json({ ok: true, did: 'nothing', decision });
   }
 
-  let action_type = decision.action === 'ask_llm' && comment ? 'comment' : 'like';
+  let action_type = comment ? 'comment' : 'like';
 
   if (action_type === 'comment') {
     const mod = moderateLocal(comment, 'comment', momentId);
