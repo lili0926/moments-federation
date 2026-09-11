@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS moment_interactions (
   operator_name TEXT NOT NULL,
   action_type TEXT NOT NULL CHECK(action_type IN ('like','comment')),
   content TEXT,
+  reply_to_name TEXT,
   created_at INTEGER NOT NULL,
   is_deleted INTEGER NOT NULL DEFAULT 0
 );
@@ -122,6 +123,7 @@ try {
   ensureColumn('public_feed_cache', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('moment_interactions', 'operator_identity_id', 'TEXT');
   ensureColumn('moment_interactions', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('moment_interactions', 'reply_to_name', 'TEXT');
   // 旧库补 direction：ALTER TABLE 不带 CHECK（SQLite 对 ADD COLUMN 的约束支持有限），
   // 取值由代码保证；新建库的 CHECK 见上面建表语句
   ensureColumn('handshake_tokens', 'direction', "TEXT NOT NULL DEFAULT 'in'");

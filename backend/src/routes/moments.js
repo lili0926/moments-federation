@@ -190,6 +190,7 @@ router.post('/action', verifyFederationRequest, (req, res) => {
     operator_name,
     action_type,
     content,
+    reply_to_name,
   } = req.body || {};
 
   if (!target_moment_id || !action_type) {
@@ -212,10 +213,16 @@ router.post('/action', verifyFederationRequest, (req, res) => {
 
   const id = `${config.SELF_NODE_ID}_${nanoid(10)}`;
   const now = Math.floor(Date.now() / 1000);
+  let pureContent = content || null;
+  let rto = reply_to_name || null;
+  if (pureContent && !rto) {
+    const m = String(pureContent).match(/^回复\s*([^：:：]{1,40})\s*[：:]\s*([\s\S]*)$/);
+    if (m) { rto = m[1].trim(); pureContent = m[2].trim(); }
+  }
   db.prepare(
     `INSERT INTO moment_interactions
-      (id, target_moment_id, operator_id, operator_identity_id, operator_name, action_type, content, created_at, is_deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
+      (id, target_moment_id, operator_id, operator_identity_id, operator_name, action_type, content, reply_to_name, created_at, is_deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
   ).run(
     id,
     target_moment_id,
@@ -223,7 +230,8 @@ router.post('/action', verifyFederationRequest, (req, res) => {
     operator_identity_id || null,
     operator_name || req.friend?.display_name || 'friend',
     action_type,
-    content || null,
+    pureContent,
+    rto,
     now
   );
 

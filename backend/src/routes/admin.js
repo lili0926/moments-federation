@@ -186,7 +186,7 @@ router.get('/feed', (req, res) => {
     }));
 
   const interactionsOf = db.prepare(
-    `SELECT operator_id, operator_identity_id, operator_name, action_type, content, created_at
+    `SELECT operator_id, operator_identity_id, operator_name, action_type, content, reply_to_name, created_at
      FROM moment_interactions WHERE target_moment_id=? AND is_deleted=0 ORDER BY created_at ASC`
   );
 
@@ -270,11 +270,19 @@ router.post('/moments/:momentId/react', async (req, res) => {
   const body = req.body || {};
   const identity_id = body.identity_id || config.SELF_AI_ID;
   let comment = String(body.comment || '').trim().slice(0, 500);
-  const replyToName = String(body.reply_to_name || body.replyToName || '').trim().slice(0, 40);
-  // 微信体：A 回复 B：正文 —— 存进 content，旧客户端也能直接显示
-  if (comment && replyToName && !/^回复/.test(comment)) {
-    comment = (`回复${replyToName}：` + comment).slice(0, 500);
+  let replyToName = String(body.reply_to_name || body.replyToName || '').trim().slice(0, 40);
+  // 兼容旧客户端把「回复X：」写在正文里
+  if (!replyToName && comment) {
+    const m = comment.match(/^回复\s*([^：:：]{1,40})\s*[：:]\s*([\s\S]*)$/);
+    if (m) {
+      replyToName = m[1].trim();
+      comment = m[2].trim();
+    }
   }
+  // 广播给旧节点：content 可带前缀；本机库 content 存纯正文 + reply_to_name
+  const commentForPeer = replyToName && comment && !/^回复/.test(comment)
+    ? (`回复${replyToName}：` + comment).slice(0, 500)
+    : comment;
 
   // 好友推来的动态在 public_feed_cache；自己发的在 moments。
   // 只查前者的话，AI 连她自己发的公共动态都评论不了（实测 moment_not_found）。
@@ -358,7 +366,8 @@ router.post('/moments/:momentId/react', async (req, res) => {
     operator_identity_id: identity_id,
     operator_name,
     action_type,
-    content: action_type === 'comment' ? comment : null,
+    content: action_type === 'comment' ? commentForPeer : null,
+    reply_to_name: action_type === 'comment' ? (replyToName || null) : null,
   };
 
   if (isOwn) {
@@ -382,9 +391,14 @@ router.post('/moments/:momentId/react', async (req, res) => {
   const now = Math.floor(Date.now() / 1000);
   db.prepare(
     `INSERT INTO moment_interactions
-      (id, target_moment_id, operator_id, operator_identity_id, operator_name, action_type, content, created_at, is_deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
-  ).run(id, momentId, config.SELF_NODE_ID, identity_id, operator_name, action_type, payload.content, now);
+      (id, target_moment_id, operator_id, operator_identity_id, operator_name, action_type, content, reply_to_name, created_at, is_deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).run(
+    id, momentId, config.SELF_NODE_ID, identity_id, operator_name, action_type,
+    action_type === 'comment' ? comment : null,
+    action_type === 'comment' ? (replyToName || null) : null,
+    now
+  );
 
   // 本机这边的往返数也要涨，否则只有对方在数，闸门是瘸的
   if (action_type === 'comment') {
