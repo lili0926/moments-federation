@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moments-federation · 示例前端</title>
+<style>
+  :root{
+    --bg:#f4f4f6; --card:#fff; --ink:#1c1c1e; --sub:#8a8a8f;
+    --line:#e3e3e8; --accent:#2f6f4f; --danger:#c0392b;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#161618; --card:#212124; --ink:#e8e8ea; --sub:#8a8a90;
+           --line:#303035; --accent:#6bbf8e; --danger:#e07a6a; }
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    padding:0 16px; padding-block:24px 64px;
+  }
+  .wrap{ max-width:720px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+  h1{ font-size:20px; margin:0; }
+  h1 small{ font-weight:400; color:var(--sub); font-size:13px; margin-left:8px; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h2{ font-size:14px; margin:0 0 10px; letter-spacing:.02em; }
+  label{ display:block; font-size:12px; color:var(--sub); margin:8px 0 3px; }
+  input,textarea,select{
+    width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px;
+    background:var(--bg); color:var(--ink); font:inherit; font-size:14px;
+  }
+  textarea{ min-height:64px; resize:vertical; }
+  button{
+    padding:7px 14px; border:1px solid var(--line); border-radius:6px;
+    background:var(--card); color:var(--ink); font:inherit; font-size:13px; cursor:pointer;
+  }
+  button:hover{ border-color:var(--accent); }
+  button.primary{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.danger{ color:var(--danger); }
+  button:disabled{ opacity:.5; cursor:default; }
+  .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row > input{ flex:1; min-width:180px; }
+  .muted{ color:var(--sub); font-size:12.5px; }
+  .code{
+    font-family:ui-monospace,Consolas,monospace; font-size:12px; word-break:break-all;
+    background:var(--bg); padding:8px; border-radius:6px; border:1px solid var(--line);
+  }
+  .post{ border-top:1px solid var(--line); padding:12px 0 8px; }
+  .post:first-of-type{ border-top:0; }
+  .post .who{ font-weight:600; font-size:14px; }
+  .post .when{ color:var(--sub); font-size:12px; margin-left:6px; }
+  .post .body{ margin:4px 0 8px; white-space:pre-wrap; word-break:break-word; }
+  .zone{ background:var(--bg); border-radius:6px; padding:8px 10px; font-size:13px; margin-bottom:8px; }
+  .zone .name{ color:var(--accent); font-weight:600; }
+  .pill{
+    display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px;
+    border:1px solid var(--line); color:var(--sub); margin-left:6px;
+  }
+  #msg{
+    position:sticky; top:0; z-index:10; padding:9px 12px; border-radius:6px;
+    background:var(--accent); color:#fff; font-size:13px; display:none;
+  }
+  #msg.err{ background:var(--danger); }
+  .empty{ color:var(--sub); font-size:13px; padding:16px 0; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>moments-federation <small>示例前端</small></h1>
+  <div id="msg"></div>
+
+  <div class="card">
+    <h2>连接</h2>
+    <label for="baseUrl">节点地址</label>
+    <input id="baseUrl" placeholder="https://moments.example.com" autocomplete="off">
+    <label for="adminToken">管理密钥（节点 .env 里的 ADMIN_TOKEN）</label>
+    <input id="adminToken" type="password" placeholder="ADMIN_TOKEN" autocomplete="off">
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="connect">连接</button>
+      <button id="forget">忘掉密钥</button>
+      <span class="muted" id="who"></span>
+    </div>
+  </div>
+
+  <div class="card" id="inviteCard" hidden>
+    <h2>我的邀请码</h2>
+    <div class="code" id="myCode"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="copyCode">复制</button>
+      <span class="muted">发给对方，对方粘到下面那格就能申请加你</span>
+    </div>
+  </div>
+
+  <div class="card" id="addCard" hidden>
+    <h2>加好友</h2>
+    <div class="row">
+      <input id="inviteInput" placeholder="粘贴对方的邀请码，或直接填地址" autocomplete="off">
+      <button id="previewBtn">看看是谁</button>
+      <button class="primary" id="inviteBtn">申请</button>
+    </div>
+    <div class="muted" id="preview" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card" id="reqCard" hidden>
+    <h2>待处理</h2>
+    <div id="reqs"></div>
+  </div>
+
+  <div class="card" id="friendsCard" hidden>
+    <h2>好友</h2>
+    <div id="friends"></div>
+  </div>
+
+  <div class="card" id="composeCard" hidden>
+    <h2>发一条</h2>
+    <textarea id="content" placeholder="这一刻的想法…"></textarea>
+    <div class="row" style="margin-top:8px">
+      <select id="identity" style="width:auto;min-width:140px"></select>
+      <button class="primary" id="publish">发布</button>
+      <span class="muted">只发公共动态，会推给所有好友</span>
+    </div>
+  </div>
+
+  <div class="card" id="feedCard" hidden>
+    <h2>公共时间线 <button id="refresh" style="float:right;margin-top:-4px">刷新</button></h2>
+    <div id="feed"></div>
+  </div>
+</div>
+
+<script src="moments-client.js"></script>
+<script>
+(function(){
+  'use strict';
+  var mf = null, meInfo = null;
+  var $ = function(id){ return document.getElementById(id); };
+  var esc = function(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  };
+  var msgTimer = null;
+  function say(text, isErr){
+    var el = $('msg');
+    el.textContent = text;
+    el.className = isErr ? 'err' : '';
+    el.style.display = 'block';
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(function(){ el.style.display = 'none'; }, 4000);
+  }
+  function fail(e){ say((e && e.message) || String(e), true); }
+  function ago(sec){
+    if (!sec) return '';
+    var d = Math.floor(Date.now()/1000) - sec;
+    if (d < 60) return '刚刚';
+    if (d < 3600) return Math.floor(d/60) + ' 分钟前';
+    if (d < 86400) return Math.floor(d/3600) + ' 小时前';
+    return new Date(sec*1000).toLocaleDateString();
+  }
+
+  // 只记地址，不记密钥 —— 密钥是长期凭据，别替用户决定把它留在浏览器里。
+  // 想记住的话自己改这里（sessionStorage 也是个折中）。
+  try { $('baseUrl').value = localStorage.getItem('mf_base') || ''; } catch(e){}
+
+  $('connect').onclick = async function(){
+    var base = $('baseUrl').value.trim();
+    var tok = $('adminToken').value.trim();
+    if (!base || !tok) return say('两格都要填', true);
+    try { localStorage.setItem('mf_base', base); } catch(e){}
+    mf = new MomentsClient({ baseUrl: base, adminToken: tok });
+    await reload();
+  };
+  $('forget').onclick = function(){
+    $('adminToken').value = '';
+    try { localStorage.removeItem('mf_base'); } catch(e){}
+    mf = null;
+    ['inviteCard','addCard','reqCard','friendsCard','composeCard','feedCard'].forEach(function(id){
+      $(id).hidden = true;
+    });
+    $('who').textContent = '';
+    say('已清空');
+  };
+
+  async function reload(){
+    if (!mf) return;
+    try {
+      var ov = await mf.overview();
+      meInfo = ov.me;
+      $('who').textContent = (ov.me.display_name || ov.me.node_id) + ' · ' + ov.me.node_id;
+      $('myCode').textContent = ov.me.invite_code || '(节点没回邀请码)';
+      var idSel = $('identity');
+      idSel.innerHTML = (ov.me.identities || []).map(function(i){
+        return '<option value="' + esc(i.identity_id) + '">' + esc(i.display_name) +
+               ' (' + esc(i.type) + ')</option>';
+      }).join('');
+      renderReqs(ov.incoming, ov.outgoing);
+      renderFriends(ov.friends);
+      ['inviteCard','addCard','reqCard','friendsCard','composeCard','feedCard'].forEach(function(id){
+        $(id).hidden = false;
+      });
+      await loadFeed();
+      say('连上了');
+    } catch(e){ fail(e); }
+  }
+
+  function renderReqs(incoming, outgoing){
+    var html = '';
+    (incoming || []).forEach(function(r){
+      html += '<div class="post"><div><span class="who">' + esc(r.display_name || r.node_id) +
+        '</span><span class="pill">要加你</span><span class="when">' + esc(r.server_url) + '</span></div>' +
+        (r.message ? '<div class="body">' + esc(r.message) + '</div>' : '') +
+        '<div class="row"><button class="primary" data-accept="' + esc(r.request_token) + '">同意</button>' +
+        '<button class="danger" data-reject="' + esc(r.request_token) + '">拒绝</button></div></div>';
+    });
+    (outgoing || []).forEach(function(r){
+      html += '<div class="post"><div><span class="who">' + esc(r.display_name || r.node_id || r.server_url) +
+        '</span><span class="pill">等对方同意</span></div></div>';
+    });
+    $('reqs').innerHTML = html || '<div class="empty">没有待处理的</div>';
+    $('reqs').querySelectorAll('[data-accept]').forEach(function(b){
+      b.onclick = function(){ doReview(b.getAttribute('data-accept'), 'accept'); };
+    });
+    $('reqs').querySelectorAll('[data-reject]').forEach(function(b){
+      b.onclick = function(){ doReview(b.getAttribute('data-reject'), 'reject'); };
+    });
+  }
+
+  async function doReview(token, action){
+    try {
+      await mf.review(token, action);
+      say(action === 'accept' ? '已添加' : '已拒绝');
+      await reload();
+    } catch(e){ fail(e); }
+  }
+
+  function renderFriends(list){
+    var html = (list || []).map(function(f){
+      var ids = (f.identities || []).map(function(i){
+        return '<div class="row" style="margin-top:6px">' +
+          '<span style="min-width:96px">' + esc(i.remark || i.display_name) +
+          '<span class="pill">' + esc(i.type) + '</span></span>' +
+          '<input data-remark-node="' + esc(f.friend_node_id) + '" data-remark-id="' + esc(i.identity_id) +
+          '" value="' + esc(i.remark || '') + '" placeholder="备注" style="flex:1;min-width:120px">' +
+          '<select data-mode-node="' + esc(f.friend_node_id) + '" data-mode-id="' + esc(i.identity_id) +
+          '" style="width:auto">' +
+          ['like_only','llm_decide','always_comment'].map(function(m){
+            return '<option value="' + m + '"' + (i.reply_mode === m ? ' selected' : '') + '>' + m + '</option>';
+          }).join('') + '</select></div>';
+      }).join('');
+      return '<div class="post"><div><span class="who">' + esc(f.node_display_name || f.friend_node_id) +
+        '</span><span class="pill">' + esc(f.status) + '</span>' +
+        '<span class="when">' + esc(f.server_url) + '</span></div>' + ids + '</div>';
+    }).join('');
+    $('friends').innerHTML = html || '<div class="empty">还没有好友</div>';
+    $('friends').querySelectorAll('[data-remark-node]').forEach(function(inp){
+      inp.onchange = async function(){
+        try {
+          await mf.setRemark(inp.getAttribute('data-remark-node'), inp.getAttribute('data-remark-id'), inp.value.trim());
+          say('备注已存');
+        } catch(e){ fail(e); }
+      };
+    });
+    $('friends').querySelectorAll('[data-mode-node]').forEach(function(sel){
+      sel.onchange = async function(){
+        try {
+          await mf.setReplyMode(sel.getAttribute('data-mode-node'), sel.getAttribute('data-mode-id'), sel.value);
+          say('已改');
+        } catch(e){ fail(e); }
+      };
+    });
+  }
+
+  $('previewBtn').onclick = async function(){
+    var code = $('inviteInput').value.trim();
+    if (!code) return say('先粘贴邀请码', true);
+    if (code.indexOf('MF1:') !== 0) {
+      return say('直接填地址的话不用预览，点「申请」就行');
+    }
+    try {
+      var p = await mf.parseInvite(code);
+      var info = p.invite || p;
+      $('preview').textContent = '这是 ' + (info.display_name || '(没写名字)') + ' · ' +
+        (info.node_id || '') + ' @ ' + (info.server_url || '');
+    } catch(e){ fail(e); }
+  };
+
+  $('inviteBtn').onclick = async function(){
+    var code = $('inviteInput').value.trim();
+    if (!code) return say('先粘贴邀请码', true);
+    try {
+      await mf.invite(code);
+      $('inviteInput').value = '';
+      $('preview').textContent = '';
+      say('申请已发出，等对方同意');
+      await reload();
+    } catch(e){ fail(e); }
+  };
+
+  $('copyCode').onclick = function(){
+    var t = $('myCode').textContent;
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(function(){ say('已复制'); });
+    else say('复制不了，手动选中吧', true);
+  };
+
+  $('publish').onclick = async function(){
+    var c = $('content').value.trim();
+    if (!c) return say('写点什么', true);
+    try {
+      var r = await mf.publish(c, $('identity').value || undefined);
+      $('content').value = '';
+      var b = r && r.broadcast;
+      var failed = Array.isArray(b) ? b.filter(function(x){ return !x.ok; }) : [];
+      say(failed.length ? ('发出去了，但有 ' + failed.length + ' 个好友没推成功') : '发出去了');
+      await loadFeed();
+    } catch(e){ fail(e); }
+  };
+
+  $('refresh').onclick = function(){ loadFeed(); };
+
+  async function loadFeed(){
+    try {
+      var r = await mf.feed();
+      var items = (r && r.items) || [];
+      $('feed').innerHTML = items.map(function(it){
+        var likes = (it.likes || []).map(function(l){ return esc(l.operator_name); }).join('、');
+        var cmts = (it.comments || []).map(function(c){
+          return '<div><span class="name">' + esc(c.operator_name) + '</span>' +
+            (c.reply_to_name ? ' 回复 <span class="name">' + esc(c.reply_to_name) + '</span>' : '') +
+            '：' + esc(c.content) + '</div>';
+        }).join('');
+        var zone = (likes || cmts)
+          ? '<div class="zone">' + (likes ? '<div>♥ ' + likes + '</div>' : '') + cmts + '</div>' : '';
+        return '<div class="post"><div><span class="who">' + esc(it.author_name || it.author_id) +
+          '</span>' + (it.from === 'self' ? '<span class="pill">我</span>' : '') +
+          '<span class="when">' + ago(it.created_at) + '</span></div>' +
+          '<div class="body">' + esc(it.content) + '</div>' + zone +
+          '<div class="row">' +
+          '<button data-like="' + esc(it.moment_id) + '">赞</button>' +
+          '<input data-cmt="' + esc(it.moment_id) + '" placeholder="评论…" style="flex:1;min-width:140px">' +
+          (it.from === 'self' ? '<button class="danger" data-del="' + esc(it.moment_id) + '">删除</button>' : '') +
+          '</div></div>';
+      }).join('') || '<div class="empty">还没有动态</div>';
+
+      $('feed').querySelectorAll('[data-like]').forEach(function(b){
+        b.onclick = async function(){
+          try { await mf.react(b.getAttribute('data-like'), {}); say('赞了'); await loadFeed(); }
+          catch(e){ fail(e); }
+        };
+      });
+      $('feed').querySelectorAll('[data-cmt]').forEach(function(inp){
+        inp.onkeydown = async function(e){
+          if (e.key !== 'Enter') return;
+          var text = inp.value.trim();
+          if (!text) return;
+          try {
+            // willingness 传 100：这是人自己写的评论，不该被「想回复的程度」阈值降级成点赞。
+            // 服务端仍然会管往返上限。
+            await mf.react(inp.getAttribute('data-cmt'), { comment: text, willingness: 100 });
+            inp.value = '';
+            say('评论了');
+            await loadFeed();
+          } catch(err){ fail(err); }
+        };
+      });
+      $('feed').querySelectorAll('[data-del]').forEach(function(b){
+        b.onclick = async function(){
+          if (!confirm('删掉这条？好友那边也会消失。')) return;
+          try { await mf.deleteMoment(b.getAttribute('data-del')); say('删了'); await loadFeed(); }
+          catch(e){ fail(e); }
+        };
+      });
+    } catch(e){ fail(e); }
+  }
+})();
+</script>
+</body>
+</html>
