@@ -17,6 +17,48 @@ function normalizeServerUrl(input) {
   return u.origin + path;
 }
 
+/**
+ * 这个地址是不是内网 / 回环 / 云厂商元数据。
+ *
+ * 为什么要管：审批别人的申请时，服务端会主动去 fetch 对方**在申请里自报的**
+ * from_server（回调 /api/friends/accept-callback）。不挡的话，任何人发一条申请、
+ * 把 from_server 指向 http://127.0.0.1:xxxx 或 http://100.100.100.200/（阿里云
+ * 元数据服务），机主一点「同意」，这台机器就会带着刚生成的 shared_secret 去打那个地址 ——
+ * 一个由陌生人指定目标的内网请求。响应虽然不回显，但足以探测内网端口、触发副作用。
+ *
+ * **默认拦住，用 ALLOW_PRIVATE_PEERS=1 放开** —— 本机自测（两个节点都在
+ * 127.0.0.1 上）和局域网部署需要它。给别人用的正式节点别开。
+ */
+function isPrivateHost(urlStr) {
+  let host;
+  try {
+    host = new URL(String(urlStr)).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return true; // 解析不了的一律当不安全
+  }
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+  // IPv6 私有 / 链路本地
+  if (/^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host)) return true;
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const [a, b] = [parseInt(m[1], 10), parseInt(m[2], 10)];
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;       // 链路本地（AWS/GCP 元数据也在这）
+    if (a === 100 && b === 100) return true;       // 阿里云元数据 100.100.100.200
+    if (a >= 224) return true;                     // 组播 / 保留
+  }
+  return false;
+}
+
+/** 允许往这个地址发请求吗（默认不许内网，见 isPrivateHost 的注释）。 */
+function peerAddressAllowed(urlStr) {
+  if (process.env.ALLOW_PRIVATE_PEERS === '1') return true;
+  return !isPrivateHost(urlStr);
+}
+
 /** 邀请码：把「我是谁 + 我在哪」打成一串可以微信发出去的文本 */
 function encodeInviteCode(info) {
   const payload = JSON.stringify({
@@ -70,6 +112,9 @@ async function sendFriendRequest({ target_server, message, peer_name, peer_node_
   }
   if (serverUrl === normalizeServerUrl(config.SELF_SERVER_URL)) {
     return { ok: false, status: 400, error: 'cannot_add_self' };
+  }
+  if (!peerAddressAllowed(serverUrl)) {
+    return { ok: false, status: 400, error: 'private_address_not_allowed' };
   }
 
   const { localIdentitiesPayload } = require('../routes/friends');
@@ -162,6 +207,13 @@ async function reviewFriendRequest({ token, action }) {
   }
 
   const { localIdentitiesPayload, upsertFriendIdentities } = require('../routes/friends');
+
+  // 回调的目标地址是**申请方自报的**，同意之前先确认它不是内网/元数据地址 ——
+  // 否则陌生人可以让这台机器带着新生成的 secret 去打她自己的内网（见 isPrivateHost）。
+  if (!peerAddressAllowed(row.from_server)) {
+    return { ok: false, status: 400, error: 'private_address_not_allowed' };
+  }
+
   const shared_secret = crypto.randomBytes(32).toString('hex');
 
   // 先回调对方；失败则原样返回，token 未消耗，可以重试
@@ -256,6 +308,8 @@ function listPendingHandshakes() {
 module.exports = {
   INVITE_PREFIX,
   normalizeServerUrl,
+  isPrivateHost,
+  peerAddressAllowed,
   encodeInviteCode,
   decodeInviteCode,
   selfInviteCode,

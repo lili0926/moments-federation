@@ -66,14 +66,36 @@ router.post('/publish', localhostOnly, async (req, res) => {
   });
 });
 
+/** 一条动态在缓存里能占多长。超了直接拒，不截断 ——
+ *  截断会把别人的话改成半截，那比丢掉更糟。 */
+const MAX_FEED_CONTENT = 10000;
+
+/** 每个好友在本机缓存里最多留多少条。超了删他最旧的。
+ *  不设上限的话，一个坏掉的好友节点可以慢慢把这台机器的磁盘写满
+ *  （单条有 express.json 的 100KB 限制，但条数原来是无限的）。 */
+const MAX_FEED_PER_FRIEND = 500;
+
+function trimFriendFeed(authorId) {
+  const n = db
+    .prepare(`SELECT COUNT(*) c FROM public_feed_cache WHERE author_id=?`)
+    .get(authorId).c;
+  if (n <= MAX_FEED_PER_FRIEND) return 0;
+  return db
+    .prepare(
+      `DELETE FROM public_feed_cache WHERE moment_id IN (
+         SELECT moment_id FROM public_feed_cache WHERE author_id=?
+         ORDER BY created_at ASC LIMIT ?
+       )`
+    )
+    .run(authorId, n - MAX_FEED_PER_FRIEND).changes;
+}
+
 // 接收好友推送
 router.post('/receive', verifyFederationRequest, (req, res) => {
   const {
     moment_id,
-    author_id,
     author_identity_id,
     author_name,
-    author_server,
     content,
     created_at,
   } = req.body || {};
@@ -81,19 +103,49 @@ router.post('/receive', verifyFederationRequest, (req, res) => {
   if (!moment_id || !content) {
     return res.status(400).json({ error: 'invalid_payload' });
   }
+  if (String(content).length > MAX_FEED_CONTENT) {
+    return res.status(413).json({ error: 'content_too_long', max: MAX_FEED_CONTENT });
+  }
 
-  const aid = author_id || req.senderId;
-  const aname = author_name || req.friend?.display_name || aid;
-  const aserver = author_server || req.friend?.server_url || '';
-  const aident = author_identity_id || 'unknown';
+  // **author_id 一律取签名证明的那个发送方，不收 body 里自报的。**
+  // 原来是 `author_id || req.senderId` —— 于是任何一个已加的好友都能推一条
+  // author_id 写成别人的动态，在她的时间线里显示成那个人发的（实测可复现）。
+  // author_server 同理：只认好友表里记着的那个地址。
+  const aid = req.senderId;
+  const aserver = req.friend?.server_url || '';
+
+  // 身份（谁家的人/AI）可以自报，但必须**确实是这个节点名下的身份** ——
+  // 握手时对方把 identities 给过来了，存在 friend_identities 里。
+  // 不校验的话，A 可以用 A 的节点身份推一条、却标成 B 家 AI 说的。
+  let aident = String(author_identity_id || '').trim() || 'unknown';
+  let aname = req.friend?.display_name || aid;
+  if (aident !== 'unknown') {
+    const idRow = db
+      .prepare(
+        `SELECT display_name, remark FROM friend_identities
+         WHERE friend_node_id=? AND identity_id=?`
+      )
+      .get(aid, aident);
+    if (!idRow) aident = 'unknown';
+    else aname = idRow.remark || idRow.display_name || aname;
+  }
+  // **显示名同样不收自报的。** 只修 author_id 是不够的：一条动态里写着「Alice」、
+  // 实际是 Bob 推来的，她在时间线上看到的仍然是 Alice —— 眼睛看到的才是她的判断依据。
+  // 名字一律取握手时存下来的那份（她自己设的备注优先）。
+  // 代价：对方改了昵称这边不会自动更新，要重新握手或她自己改备注。这个交换值得。
   const cat = parseInt(created_at, 10) || Math.floor(Date.now() / 1000);
+
+  // 一条动态只属于推它来的那个节点：别人已经推过的 moment_id 不许被覆盖。
+  const prior = db.prepare(`SELECT author_id FROM public_feed_cache WHERE moment_id=?`).get(moment_id);
+  if (prior && prior.author_id !== aid) {
+    return res.status(409).json({ error: 'moment_id_owned_by_another_node' });
+  }
 
   db.prepare(
     `INSERT INTO public_feed_cache
       (moment_id, author_id, author_identity_id, author_name, author_server, content, created_at, is_deleted)
      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
      ON CONFLICT(moment_id) DO UPDATE SET
-       author_id=excluded.author_id,
        author_identity_id=excluded.author_identity_id,
        author_name=excluded.author_name,
        author_server=excluded.author_server,
@@ -102,6 +154,7 @@ router.post('/receive', verifyFederationRequest, (req, res) => {
        is_deleted=0`
   ).run(moment_id, aid, aident, aname, aserver, content, cat);
 
+  trimFriendFeed(aid);
   res.json({ ok: true });
 });
 
@@ -198,8 +251,13 @@ router.post('/action', verifyFederationRequest, (req, res) => {
   }
 
   if (action_type === 'delete') {
-    // 好友侧：只软删 cache；若误推到作者库也尝试软删（幂等）
-    db.prepare(`UPDATE public_feed_cache SET is_deleted=1 WHERE moment_id=?`).run(target_moment_id);
+    // 好友侧：只软删 cache。**必须带上 author_id** —— 原来这句没认作者，
+    // 于是任何一个已加的好友都能删掉别的好友推来的动态（实测可复现）。
+    // 下面那句本来就认（作者只可能是发送方自己），保持原样。
+    db.prepare(`UPDATE public_feed_cache SET is_deleted=1 WHERE moment_id=? AND author_id=?`).run(
+      target_moment_id,
+      req.senderId
+    );
     db.prepare(`UPDATE moments SET is_deleted=1 WHERE id=? AND author_id=?`).run(
       target_moment_id,
       req.senderId
@@ -219,6 +277,28 @@ router.post('/action', verifyFederationRequest, (req, res) => {
     const m = String(pureContent).match(/^回复\s*([^：:：]{1,40})\s*[：:]\s*([\s\S]*)$/);
     if (m) { rto = m[1].trim(); pureContent = m[2].trim(); }
   }
+  if (pureContent && pureContent.length > 1000) {
+    return res.status(413).json({ error: 'comment_too_long' });
+  }
+
+  // **operator_id 一律取签名证明的那个发送方**，和 /receive 同一个理由：
+  // 原来是 `operator_id || req.senderId`，于是一个已加的好友能用别人的名义
+  // 在她的时间线里点赞和评论（实测可复现）。
+  // 身份同样要校验是不是这个节点名下的。
+  const opId = req.senderId;
+  let opIdent = String(operator_identity_id || '').trim() || null;
+  let opName = req.friend?.display_name || 'friend';
+  if (opIdent) {
+    const idRow = db
+      .prepare(
+        `SELECT display_name, remark FROM friend_identities
+         WHERE friend_node_id=? AND identity_id=?`
+      )
+      .get(opId, opIdent);
+    if (!idRow) opIdent = null;
+    else opName = idRow.remark || idRow.display_name || opName;
+  }
+
   db.prepare(
     `INSERT INTO moment_interactions
       (id, target_moment_id, operator_id, operator_identity_id, operator_name, action_type, content, reply_to_name, created_at, is_deleted)
@@ -226,9 +306,9 @@ router.post('/action', verifyFederationRequest, (req, res) => {
   ).run(
     id,
     target_moment_id,
-    operator_id || req.senderId,
-    operator_identity_id || null,
-    operator_name || req.friend?.display_name || 'friend',
+    opId,
+    opIdent,
+    opName,
     action_type,
     pureContent,
     rto,
