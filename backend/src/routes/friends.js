@@ -37,12 +37,42 @@ router.post('/request', (req, res) => {
   const body = req.body || {};
   const from_id = body.from_id;
   const from_server = body.from_server;
-  const key = `freq:${from_server || req.ip}`;
-  if (!allow(key, config.FRIEND_REQUEST_RATE_LIMIT)) {
+
+  // 限流的 key 只能用**连接层能证实**的东西。
+  // 原来是 `from_server || req.ip` —— from_server 是 body 里自报的，换一个就是新桶，
+  // 实测换 9 个 from_server 连发 9 次全部通过（限流形同虚设）。
+  // app.js 里 trust proxy=false，所以 req.ip 经 nginx 来永远是 127.0.0.1；
+  // nginx 对这个 location 设了 X-Real-IP（proxy_set_header 是覆盖，客户端伪造不了）。
+  // 两道一起限：单 IP 一道，全局一道 —— 全局那道是 X-Real-IP 缺失时的兜底，
+  // 也挡住「换一批 IP 慢慢刷」。她一个人用，一小时几十次绰绰有余。
+  const srcIp = req.get('X-Real-IP') || req.ip || 'unknown';
+  if (!allow(`freq:ip:${srcIp}`, config.FRIEND_REQUEST_RATE_LIMIT)) {
     return res.status(429).json({ error: 'rate_limited' });
   }
+  if (!allow('freq:global', config.FRIEND_REQUEST_GLOBAL_LIMIT)) {
+    return res.status(429).json({ error: 'rate_limited_global' });
+  }
+
   if (!from_id || !from_server || !body.verify_token) {
     return res.status(400).json({ error: 'invalid_payload' });
+  }
+
+  // from_id / from_server 全是对方自报的，这个口不带任何凭据。
+  // 不设防的话，任何人拿一个**已 accepted** 好友的 node_id 发一条申请，就能把
+  // friends 那行的 status 打回 pending、server_url 改成自己的地址 ——
+  // 而 verifyFederationRequest 要 status='accepted'，broadcast 也只发给 accepted，
+  // 于是那位好友的关系被一个匿名公网请求远程掐断。
+  // 更坏的下一步：她看到「XX 想加你」点了同意，reviewFriendRequest 会把新生成的
+  // shared_secret 回调到**攻击者那个地址**，等于把好友身份整个让出去。
+  // （/accept-callback 里本来就有这道检查，这个口漏了。2026-09-15 实测可复现。）
+  const existing = db.prepare(`SELECT * FROM friends WHERE friend_id=?`).get(from_id);
+  if (existing && existing.status === 'accepted') {
+    if (normalizeServerUrl(existing.server_url) !== normalizeServerUrl(from_server)) {
+      return res.status(409).json({ error: 'friend_id_taken_by_another_server' });
+    }
+    // 同一台服务器重发申请是合法场景（对方重装、secret 丢了）：
+    // 照样记一条待审 token 让她决定，但**不动 friends 那一行** ——
+    // 她同意之后 reviewFriendRequest 会更新 secret，没同意之前旧关系继续用。
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -70,17 +100,21 @@ router.post('/request', (req, res) => {
     expires
   );
 
-  // pending 好友行（尚无 secret）
-  db.prepare(
-    `INSERT INTO friends (friend_id, display_name, server_url, shared_secret, status, created_at)
-     VALUES (?, ?, ?, '', 'pending', ?)
-     ON CONFLICT(friend_id) DO UPDATE SET
-       display_name=excluded.display_name,
-       server_url=excluded.server_url,
-       status='pending'`
-  ).run(from_id, body.from_name || from_id, from_server, now);
+  // pending 好友行（尚无 secret）。
+  // 已经是 accepted 的那位**一行都不碰** —— 见上面那段：碰了就等于让任何人
+  // 远程把她的好友关系打回 pending。她同意之后 reviewFriendRequest 会把这行更新掉。
+  if (!existing || existing.status !== 'accepted') {
+    db.prepare(
+      `INSERT INTO friends (friend_id, display_name, server_url, shared_secret, status, created_at)
+       VALUES (?, ?, ?, '', 'pending', ?)
+       ON CONFLICT(friend_id) DO UPDATE SET
+         display_name=excluded.display_name,
+         server_url=excluded.server_url,
+         status='pending'`
+    ).run(from_id, body.from_name || from_id, from_server, now);
 
-  upsertFriendIdentities(from_id, body.identities || []);
+    upsertFriendIdentities(from_id, body.identities || []);
+  }
 
   res.json({ ok: true, status: 'pending_review' });
 });

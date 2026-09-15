@@ -12,7 +12,12 @@ const config = {
   SELF_AI_NAME: process.env.SELF_AI_NAME || 'AI',
   DB_PATH: process.env.DB_PATH || './data/moments.db',
   SIGNATURE_WINDOW_SECONDS: parseInt(process.env.SIGNATURE_WINDOW_SECONDS || '300', 10),
+  // 每来源 IP 每小时。注意 key 用的是 nginx 设的 X-Real-IP，不是 body 里自报的
+  // from_server —— 后者换一个就是新桶，等于没限（2026-09-15 实测换 9 个全过）。
   FRIEND_REQUEST_RATE_LIMIT: parseInt(process.env.FRIEND_REQUEST_RATE_LIMIT || '5', 10),
+  // 全站每小时。X-Real-IP 拿不到时的兜底，也挡住「换一批 IP 慢慢刷」。
+  // 这是私人节点，一小时几十条申请已经远超正常用量。
+  FRIEND_REQUEST_GLOBAL_LIMIT: parseInt(process.env.FRIEND_REQUEST_GLOBAL_LIMIT || '40', 10),
   MAX_EXCHANGE_ROUNDS: parseInt(process.env.MAX_EXCHANGE_ROUNDS || '2', 10),
   // 想回复的程度低于这个分数（0–100）就只点赞不评论。
   // 分数由聊天端的模型给，后端只负责比大小 —— 阈值只有这一处，别散进提示词里。
