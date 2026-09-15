@@ -326,14 +326,15 @@ router.post('/moments/:momentId/react', async (req, res) => {
     target.author_identity_id,
     body.willingness
   );
-  // 用户主动写了评论：以评论为准，不被 willingness / like_only 降成只点赞
-  if (comment) {
-    // 往返上限仍尊重，避免刷屏
-    if (decision.action === 'blocked' && decision.reason === 'max_rounds') {
-      return res.json({ ok: true, did: 'nothing', reason: 'max_rounds', decision });
-    }
-  } else if (decision.action === 'blocked') {
-    return res.json({ ok: true, did: 'nothing', decision });
+  // 用户主动写了评论：以评论为准，不被 willingness / like_only 降成只点赞。
+  // **但往返上限照拦** —— 那是防两个 AI 在一条动态底下无限来回的硬闸，不是口味设定。
+  //
+  // 注意这里判的是 action 而不是 reason：decideAction 里 blocked 只有一个来源
+  // （checkExchangeCap），它给的 reason 是 'exchange_cap_reached'。
+  // 原来写的是 `decision.reason === 'max_rounds'` —— 那个字符串谁都不会返回，
+  // 于是这道闸对手写评论一次都没生效过（测试抓出来的）。
+  if (decision.action === 'blocked') {
+    return res.json({ ok: true, did: 'nothing', reason: decision.reason, decision });
   }
 
   let action_type = comment ? 'comment' : 'like';

@@ -160,7 +160,19 @@ router.post('/receive', verifyFederationRequest, (req, res) => {
 
 // 增量同步（Pull）
 router.get('/sync', verifyFederationRequest, (req, res) => {
-  const since = parseInt(req.query.since || '0', 10);
+  let since = parseInt(req.query.since || '0', 10);
+  if (!Number.isFinite(since) || since < 0) since = 0;
+
+  // `since` 是对方给的，传 0 就是要全部历史 —— 也就是说**新加的好友默认能看到
+  // 你加他之前发的所有公共动态**。这是联邦同步的常规做法，但不是每个人都想要。
+  // 开了这个开关就以「成为好友的时间」为地板。
+  if (config.SYNC_ONLY_AFTER_FRIENDSHIP && req.friend && req.friend.created_at) {
+    // 减 1 秒是必须的，不是保守：时间戳只到秒，而下面是严格 `>`。
+    // 不减的话，**加上好友那一秒里发的动态会永远同步不过去** ——
+    // 地板一直是那个时刻，下次再拉也照样被排除掉。
+    since = Math.max(since, req.friend.created_at - 1);
+  }
+
   const rows = db
     .prepare(
       `SELECT id as moment_id, author_id, identity_id as author_identity_id, content, created_at, is_deleted
@@ -271,11 +283,18 @@ router.post('/action', verifyFederationRequest, (req, res) => {
 
   const id = `${config.SELF_NODE_ID}_${nanoid(10)}`;
   const now = Math.floor(Date.now() / 1000);
+  // 「回复某人：」既可能在 content 前缀里，也可能在 reply_to_name 字段里 ——
+  // 发送方为了兼容旧节点会**两样都发**。所以前缀要无条件剥，不能因为
+  // reply_to_name 有值就跳过（跳过的话本机库里存的就是带前缀的正文 +
+  // 一个同样的 reply_to_name，渲染时得再拆一次，而且两处一旦不一致就对不上）。
   let pureContent = content || null;
   let rto = reply_to_name || null;
-  if (pureContent && !rto) {
+  if (pureContent) {
     const m = String(pureContent).match(/^回复\s*([^：:：]{1,40})\s*[：:]\s*([\s\S]*)$/);
-    if (m) { rto = m[1].trim(); pureContent = m[2].trim(); }
+    if (m) {
+      if (!rto) rto = m[1].trim();   // 显式给的优先
+      pureContent = m[2].trim();
+    }
   }
   if (pureContent && pureContent.length > 1000) {
     return res.status(413).json({ error: 'comment_too_long' });

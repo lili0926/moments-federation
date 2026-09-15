@@ -24,6 +24,13 @@ const config = {
   // 与 MAX_EXCHANGE_ROUNDS 是两层：那个是防爆的硬闸，这个是调口味的。
   REPLY_WILLINGNESS_THRESHOLD: parseInt(process.env.REPLY_WILLINGNESS_THRESHOLD || '60', 10),
   HANDSHAKE_TOKEN_TTL_SECONDS: parseInt(process.env.HANDSHAKE_TOKEN_TTL_SECONDS || '600', 10),
+  // 好友拉历史时，只给「加上好友之后」发的。
+  // 默认 0（给全部历史）—— 联邦同步的常规做法，但要知道这意味着**新加的好友
+  // 能看到你以前所有的公共动态**。介意就设 1。
+  SYNC_ONLY_AFTER_FRIENDSHIP: process.env.SYNC_ONLY_AFTER_FRIENDSHIP === '1',
+  // 审核日志保留多少天。这张表每发一条动态/评论就记一行（含最多 2000 字正文），
+  // 只增不减 —— 不清理的话它会是整个库里最大的一块。设 0 关掉清理。
+  AUDIT_LOG_KEEP_DAYS: parseInt(process.env.AUDIT_LOG_KEEP_DAYS || '90', 10),
   // 前端管理通道：为空则 /api/admin/* 整体不可用
   ADMIN_TOKEN: process.env.ADMIN_TOKEN || '',
   // 每 IP 每小时。前端会轮询待审列表，60 太紧（每分钟一次就打满），给到 600

@@ -53,9 +53,44 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal_error', message: err.message });
 });
 
-app.listen(config.PORT, '0.0.0.0', () => {
-  console.log(
-    `[moments] phase=${config.PHASE} node=${config.SELF_NODE_ID} listening :${config.PORT}`
-  );
-  console.log(`[moments] SELF_SERVER_URL=${config.SELF_SERVER_URL}`);
-});
+/**
+ * 审核日志的清理。
+ *
+ * public_audit_log 每发一条动态 / 每写一条评论就记一行，还带最多 2000 字正文，
+ * 而且从来没有任何东西删过它 —— 跑久了它会是整个库里最大的一块，
+ * 而这台机器只有一个 SQLite 文件在扛。
+ *
+ * 启动时清一次，之后每天一次。AUDIT_LOG_KEEP_DAYS=0 就完全不清。
+ */
+function pruneAuditLog() {
+  if (!config.AUDIT_LOG_KEEP_DAYS) return 0;
+  const cutoff = Math.floor(Date.now() / 1000) - config.AUDIT_LOG_KEEP_DAYS * 86400;
+  try {
+    const db = require('./db');
+    const n = db.prepare(`DELETE FROM public_audit_log WHERE created_at < ?`).run(cutoff).changes;
+    if (n) console.log(`[moments] 清掉 ${n} 条过期审核日志（保留 ${config.AUDIT_LOG_KEEP_DAYS} 天）`);
+    return n;
+  } catch (e) {
+    console.error('[moments] 清理审核日志失败:', e.message);
+    return 0;
+  }
+}
+
+// 测试会 require 这个文件来拿 app，那种情况下不该真去监听端口。
+if (require.main === module) {
+  app.listen(config.PORT, '0.0.0.0', () => {
+    console.log(
+      `[moments] phase=${config.PHASE} node=${config.SELF_NODE_ID} listening :${config.PORT}`
+    );
+    console.log(`[moments] SELF_SERVER_URL=${config.SELF_SERVER_URL}`);
+    if (!config.SELF_SERVER_URL.startsWith('https://')) {
+      console.log(
+        '[moments] ⚠ 当前不是 HTTPS：ADMIN_TOKEN 和动态正文都是明文过网，见 SECURITY.md'
+      );
+    }
+    pruneAuditLog();
+    setInterval(pruneAuditLog, 24 * 3600 * 1000).unref();
+  });
+}
+
+module.exports = app;

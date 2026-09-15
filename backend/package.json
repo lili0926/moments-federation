@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "node src/app.js",
-    "init-db": "node -e \"require('./src/db'); console.log('db ok')\""
+    "init-db": "node -e \"require('./src/db'); console.log('db ok')\"",
+    "test": "node --test --test-concurrency=1",
+    "backup": "node scripts/backup.js"
   },
   "engines": {
     "node": ">=18"
