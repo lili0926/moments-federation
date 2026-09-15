@@ -205,7 +205,7 @@ echo -n "占用内存                 → "; systemctl show "$SERVICE" -p Memory
 echo
 echo "================ 前端填这两格 ================"
 echo "Base URL : $PUBLIC_URL"
-echo -n "管理密钥 : "; grep '^ADMIN_TOKEN=' "$APP_DIR/backend/.env" | cut -d= -f2
+echo    "管理密钥 : 在 $APP_DIR/backend/.env 里（自己 cat，别贴到聊天或截图里）"
 echo
 echo "别忘了："
 echo "  1) 云厂商安全组 / 防火墙放行 TCP $PORT_PUBLIC，否则好友连不进来"
