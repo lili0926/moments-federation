@@ -3,6 +3,16 @@
   "version": "0.2.0",
   "description": "熟人互信·纯文字朋友圈联邦后端（可部署版）",
   "main": "src/app.js",
+  "license": "AGPL-3.0-or-later",
+  "author": "lili0926 (https://github.com/lili0926)",
+  "contributors": [
+    "lili0926 (https://github.com/lili0926)",
+    "Claude — Anthropic, via Claude Code (https://claude.com/claude-code)"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lili0926/moments-federation.git"
+  },
   "scripts": {
     "start": "node src/app.js",
     "dev": "node src/app.js",
